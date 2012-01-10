@@ -82,7 +82,7 @@ class HocrConverter():
     else:
       self.xmlns = ''
       
-  def to_pdf(self, imageFileName, outFileName, fontname="Courier", fontsize=8):
+  def to_pdf(self, imageFileName, outFileName, fontname="Times-Roman", fontsize=10, withVisibleOCRText=False, withVisibleImage=True, withVisibleBoundingBoxes=False):
     """
     Creates a PDF file with an image superimposed on top of the text.
     
@@ -135,24 +135,42 @@ class HocrConverter():
     pdf = Canvas(outFileName, pagesize=(width*inch, height*inch), pageCompression=1) # page size in points (1/72 in.)
     
     # put the image on the page, scaled to fill the page
-    pdf.drawInlineImage(im, 0, 0, width=width*inch, height=height*inch)
+    if withVisibleImage:
+      pdf.drawInlineImage(im, 0, 0, width=width*inch, height=height*inch)
     
     if self.hocr is not None:
-      for line in self.hocr.findall(".//%sspan"%(self.xmlns)):
-        if line.attrib['class'] == 'ocr_line':
-          coords = self.element_coordinates(line)
+      for word in self.hocr.findall(".//%sspan"%(self.xmlns)):
+        if word.attrib['class'] == 'ocr_word':
+          coords = self.element_coordinates(word)
+          content = self._get_element_text(word)
+          if content.rstrip() == '':
+            continue
           text = pdf.beginText()
           text.setFont(fontname, fontsize)
-          text.setTextRenderMode(3) # invisible
+          if not withVisibleOCRText:
+            #text.setTextRenderMode(0) # visible
+          #else:
+            text.setTextRenderMode(3) # invisible
           
           # set cursor to bottom left corner of line bbox (adjust for dpi)
-          text.setTextOrigin((float(coords[0])/ocr_dpi[0])*inch, (height*inch)-(float(coords[3])/ocr_dpi[1])*inch)
+          # Can't determine original text's baseline, but guess that ypg
+          # roughly push it down by ~2/3 of line height.  Correct for that.
+          # PDF y coords increase going *up* the page, remember.  Assume "o" is
+          # round so width == line height.
+          origin_y = (height*inch)-(float(coords[3])/ocr_dpi[1])*inch
+          if re.search(r"[gjpqy()]", content):
+            origin_y += pdf.stringWidth("o") * 1/3
+          if re.search(r"[\[\]()]", content):
+            origin_y += pdf.stringWidth("o") * 1/3.5
+          elif re.search(r"[,;]", content):
+            origin_y += pdf.stringWidth("o") * 1/4
+          text.setTextOrigin((float(coords[0])/ocr_dpi[0])*inch, origin_y)
           
           # scale the width of the text to fill the width of the line's bbox
-          text.setHorizScale((((float(coords[2])/ocr_dpi[0]*inch)-(float(coords[0])/ocr_dpi[0]*inch))/pdf.stringWidth(line.text.rstrip(), fontname, fontsize))*100)
+          text.setHorizScale((((float(coords[2])/ocr_dpi[0]*inch)-(float(coords[0])/ocr_dpi[0]*inch))/pdf.stringWidth(content.rstrip(), fontname, fontsize))*100)
           
           # write the text to the page
-          text.textLine(line.text.rstrip())
+          text.textLine(content.rstrip())
           pdf.drawText(text)
     
     # finish up the page and save it
@@ -169,7 +187,18 @@ class HocrConverter():
 
 if __name__ == "__main__":
   if len(sys.argv) < 4:
-    print 'Usage: python HocrConverter.py inputHocrFile inputImageFile outputPdfFile'
+    print 'Usage: python HocrConverter.py [-t] [-I] [-b] inputHocrFile inputImageFile outputPdfFile'
     sys.exit(1)
+  withVisibleOCRText = False;
+  withVisibleImage = True;
+  withVisibleBoundingBoxes = False;
+  while sys.argv[1][0] == "-":
+    arg = sys.argv.pop(1)
+    if arg == "-t":
+      withVisibleOCRText = True;
+    elif arg == "-I":
+      withVisibleImage = False;
+    elif arg == "-b":
+      withVisibleBoundingBoxes = True;
   hocr = HocrConverter(sys.argv[1])
-  hocr.to_pdf(sys.argv[2], sys.argv[3])
+  hocr.to_pdf(sys.argv[2], sys.argv[3], withVisibleOCRText=withVisibleOCRText, withVisibleImage=withVisibleImage, withVisibleBoundingBoxes=withVisibleBoundingBoxes)
